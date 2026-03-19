@@ -1,0 +1,40 @@
+#pragma once
+
+// ─── WiFi ────────────────────────────────────────────────────────────────────
+#define WIFI_SSID      "YourWiFiSSID"
+#define WIFI_PASSWORD  "YourWiFiPassword"
+
+// ─── OpenAI ──────────────────────────────────────────────────────────────────
+#define OPENAI_API_KEY "sk-your-api-key-here"
+// Model to use (gpt-3.5-turbo is fast and cheap; try gpt-4o for better responses)
+#define OPENAI_MODEL   "gpt-3.5-turbo"
+// Max tokens in the spirit's reply (keep short to fit the display)
+#define OPENAI_MAX_TOKENS 150
+// Response randomness: 0.0 = deterministic, 1.0 = very creative (0.9 recommended)
+#define OPENAI_TEMPERATURE 0.9
+
+// ─── Spirit persona ───────────────────────────────────────────────────────────
+// System prompt that shapes the AI's personality
+#define SPIRIT_PERSONA \
+    "You are a mystical spirit speaking through a spirit board from beyond the veil. " \
+    "Respond in cryptic, ethereal, poetic language — short and evocative, under 100 words. " \
+    "Never break character. Speak as if you exist between worlds, carrying ancient knowledge."
+
+// ─── Pin definitions for LilyGo T-Embed Plus ─────────────────────────────────
+// Verify against your hardware revision schematic before flashing.
+
+// ST7789V 1.9" display (170×320, SPI)
+#define PIN_TFT_MOSI    11
+#define PIN_TFT_SCLK    12
+#define PIN_TFT_CS      10
+#define PIN_TFT_DC      13
+#define PIN_TFT_RST      9
+#define PIN_TFT_BL      15   // Backlight — active HIGH
+
+// EC11 rotary encoder
+#define PIN_ENCODER_A    1
+#define PIN_ENCODER_B    2
+#define PIN_ENCODER_BTN 21   // Push-button (active LOW, pulled up internally)
+
+// I2S speaker (optional — used only for boot chime if uncommented in main.cpp)
+#define PIN_SPEAKER     46

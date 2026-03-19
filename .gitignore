@@ -1,0 +1,7 @@
+# Build artifacts
+firmware/.pio/
+firmware/.pioenvs/
+firmware/.piolibdeps/
+
+# Secrets — never commit the live config
+firmware/src/config.h
