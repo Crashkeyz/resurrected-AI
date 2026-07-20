@@ -1,0 +1,13 @@
+# Build output
+dist/
+dist-ssr/
+
+# Dependencies
+node_modules/
+
+# Editor / OS
+.DS_Store
+*.local
+
+# Vite
+vite.config.ts.timestamp-*
