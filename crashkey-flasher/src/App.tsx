@@ -543,7 +543,12 @@ function App() {
                     key={project.id}
                     onClick={() => {
                       setSelectedProject(project)
-                      const devType: DeviceType = project.deviceFamily === 'flipper' ? 'flipper' : 'esp32s3'
+                      const devTypeMap: Record<string, DeviceType> = {
+                      esp32s3: 'esp32s3',
+                      esp32: 'esp32s3',   // esptool-js handles both via the same USB flash path
+                      flipper: 'flipper',
+                    }
+                    const devType: DeviceType = devTypeMap[project.deviceFamily] ?? 'esp32s3'
                       setDevice(devType)
                       setStep('connect')
                     }}
