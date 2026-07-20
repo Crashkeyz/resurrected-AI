@@ -1,0 +1,45 @@
+name: Deploy Terminator ESP32 Flasher to GitHub Pages
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write   # needed for peaceiris/actions-gh-pages
+
+jobs:
+  deploy:
+    name: Build & deploy flasher
+    runs-on: ubuntu-latest
+
+    steps:
+      # ── 1. Checkout ──────────────────────────────────────────────────────────
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # ── 2. Node + npm ────────────────────────────────────────────────────────
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: crashkey-flasher/package-lock.json
+
+      # ── 3. Install & build ───────────────────────────────────────────────────
+      - name: Install dependencies
+        run: npm ci
+        working-directory: crashkey-flasher
+
+      - name: Build flasher
+        run: npm run build
+        working-directory: crashkey-flasher
+
+      # ── 4. Deploy to gh-pages ────────────────────────────────────────────────
+      - name: Deploy to GitHub Pages
+        uses: peaceiris/actions-gh-pages@v4
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: crashkey-flasher/dist
+          publish_branch: gh-pages
+          commit_message: "Deploy Terminator ESP32 Flasher — ${{ github.sha }}"
