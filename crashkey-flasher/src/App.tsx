@@ -3,11 +3,12 @@ import './App.css'
 import {
   Usb, Wifi, Bluetooth, Zap, AlertTriangle, CheckCircle2, XCircle,
   Upload, Terminal, ChevronDown, ChevronUp, RotateCcw, Cpu, Radio,
-  HelpCircle, Loader2
+  HelpCircle, Loader2, Download, BookOpen
 } from 'lucide-react'
+import { FIRMWARE_CATALOG, type CatalogEntry } from './firmware-catalog'
 
 type DeviceType = 'esp32s3' | 'flipper' | null
-type FlashStep = 'select' | 'connect' | 'upload' | 'flash' | 'done' | 'error'
+type FlashStep = 'select' | 'project' | 'connect' | 'upload' | 'flash' | 'done' | 'error'
 type LogLevel = 'info' | 'warn' | 'error' | 'success'
 
 interface LogEntry {
@@ -18,7 +19,7 @@ interface LogEntry {
 
 function App() {
   const [device, setDevice] = useState<DeviceType>(null)
-  const [step, setStep] = useState<FlashStep>('select')
+  const [step, setStep] = useState<FlashStep>('project')
   const [logs, setLogs] = useState<LogEntry[]>([])
   const [progress, setProgress] = useState(0)
   const [isConnected, setIsConnected] = useState(false)
@@ -33,6 +34,8 @@ function App() {
   const [flashMethod, setFlashMethod] = useState<'usb' | 'wifi' | 'bt'>('usb')
   const [otaUrl, setOtaUrl] = useState('')
   const [flipperFwUrl, setFlipperFwUrl] = useState('https://update.flipperzero.one/firmware/release/latest')
+  const [selectedProject, setSelectedProject] = useState<CatalogEntry | null>(null)
+  const [isFetchingFirmware, setIsFetchingFirmware] = useState(false)
 
   const portRef = useRef<SerialPort | null>(null)
   const logEndRef = useRef<HTMLDivElement>(null)
@@ -397,11 +400,82 @@ function App() {
   const resetAll = () => {
     disconnect()
     setDevice(null)
+    setSelectedProject(null)
     setFirmwareFile(null)
     setBootloaderFile(null)
     setPartitionsFile(null)
     setProgress(0)
     clearLogs()
+    setStep('project')
+  }
+
+  const fetchLatestFirmware = async (project: CatalogEntry) => {
+    setIsFetchingFirmware(true)
+    addLog(`Fetching latest release from ${project.repo}...`, 'info')
+
+    try {
+      const apiUrl = `https://api.github.com/repos/${project.repo}/releases/latest`
+      const res = await fetch(apiUrl, {
+        headers: { Accept: 'application/vnd.github+json' },
+      })
+
+      if (!res.ok) {
+        if (res.status === 404) {
+          addLog('No releases found for this project yet. Please upload firmware manually.', 'warn')
+        } else {
+          addLog(`GitHub API error: ${res.status} ${res.statusText}`, 'error')
+        }
+        return
+      }
+
+      const release = await res.json() as {
+        tag_name: string
+        name: string
+        assets: { name: string; browser_download_url: string }[]
+      }
+
+      addLog(`Found release: ${release.name || release.tag_name}`, 'success')
+
+      const downloadAsset = async (filename: string): Promise<File | null> => {
+        const asset = release.assets.find(a => a.name === filename)
+        if (!asset) {
+          addLog(`Asset not found in release: ${filename}`, 'warn')
+          return null
+        }
+        addLog(`Downloading ${filename}...`, 'info')
+        const dlRes = await fetch(asset.browser_download_url)
+        if (!dlRes.ok) {
+          addLog(`Failed to download ${filename}: ${dlRes.statusText}`, 'error')
+          return null
+        }
+        const blob = await dlRes.blob()
+        addLog(`Downloaded ${filename} (${(blob.size / 1024).toFixed(1)} KB)`, 'success')
+        return new File([blob], filename, { type: 'application/octet-stream' })
+      }
+
+      const fw = await downloadAsset(project.assets.firmware)
+      if (fw) setFirmwareFile(fw)
+
+      if (project.assets.bootloader) {
+        const bl = await downloadAsset(project.assets.bootloader)
+        if (bl) setBootloaderFile(bl)
+      }
+
+      if (project.assets.partitions) {
+        const pt = await downloadAsset(project.assets.partitions)
+        if (pt) setPartitionsFile(pt)
+      }
+
+      if (fw) {
+        addLog('Firmware ready! Click Flash to continue.', 'success')
+      }
+    } catch (err) {
+      const error = err as Error
+      addLog(`Fetch error: ${error.message}`, 'error')
+      addLog('Note: GitHub API may be rate-limited if you have tried many times. Try again in a minute.', 'warn')
+    } finally {
+      setIsFetchingFirmware(false)
+    }
   }
 
   const startFlash = () => {
@@ -422,8 +496,8 @@ function App() {
           <div className="flex items-center gap-3">
             <Zap className="text-yellow-400" size={28} />
             <div>
-              <h1 className="text-xl font-bold text-white">CrashKey Flasher</h1>
-              <p className="text-xs text-gray-400">Multi-device firmware flasher</p>
+              <h1 className="text-xl font-bold text-white">Terminator ESP32 Flasher</h1>
+              <p className="text-xs text-gray-400">One-click firmware flasher for CrashKey devices</p>
             </div>
           </div>
           <div className="flex items-center gap-3">
@@ -444,6 +518,75 @@ function App() {
       </header>
 
       <main className="max-w-5xl mx-auto px-6 py-8">
+        {step === 'project' && (
+          <section>
+            <h2 className="text-lg font-semibold mb-1 text-gray-200 flex items-center gap-2">
+              <BookOpen size={18} className="text-yellow-400" /> Select a Project to Flash
+            </h2>
+            <p className="text-sm text-gray-400 mb-6">
+              Choose a CrashKey firmware project. The latest release will be downloaded automatically.
+            </p>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-8">
+              {FIRMWARE_CATALOG.map(project => {
+                const colorMap: Record<string, { border: string; hover: string; badge: string; text: string }> = {
+                  purple: { border: 'border-purple-700/40', hover: 'hover:border-purple-500/60', badge: 'bg-purple-900/50 text-purple-300', text: 'text-purple-400' },
+                  yellow: { border: 'border-yellow-700/40', hover: 'hover:border-yellow-500/60', badge: 'bg-yellow-900/50 text-yellow-300', text: 'text-yellow-400' },
+                  cyan:   { border: 'border-cyan-700/40',   hover: 'hover:border-cyan-500/60',   badge: 'bg-cyan-900/50 text-cyan-300',   text: 'text-cyan-400' },
+                  red:    { border: 'border-red-700/40',    hover: 'hover:border-red-500/60',    badge: 'bg-red-900/50 text-red-300',    text: 'text-red-400' },
+                  orange: { border: 'border-orange-700/40', hover: 'hover:border-orange-500/60', badge: 'bg-orange-900/50 text-orange-300', text: 'text-orange-400' },
+                }
+                const c = colorMap[project.color] ?? colorMap.yellow
+
+                return (
+                  <button
+                    key={project.id}
+                    onClick={() => {
+                      setSelectedProject(project)
+                      const devTypeMap: Record<string, DeviceType> = {
+                      esp32s3: 'esp32s3',
+                      esp32: 'esp32s3',   // esptool-js handles both via the same USB flash path
+                      flipper: 'flipper',
+                    }
+                    const devType: DeviceType = devTypeMap[project.deviceFamily] ?? 'esp32s3'
+                      setDevice(devType)
+                      setStep('connect')
+                    }}
+                    className={`p-5 rounded-xl border-2 text-left transition-all bg-gray-900 ${c.border} ${c.hover}`}
+                  >
+                    <div className="flex items-start justify-between gap-2 mb-2">
+                      <div>
+                        <h3 className={`font-bold text-white text-sm`}>{project.name}</h3>
+                        <p className={`text-xs ${c.text} mt-0.5`}>{project.hardware}</p>
+                      </div>
+                      <span className={`text-xs px-2 py-0.5 rounded flex-shrink-0 ${c.badge}`}>
+                        {project.deviceFamily.toUpperCase()}
+                      </span>
+                    </div>
+                    <p className="text-xs text-gray-400 leading-relaxed">{project.description}</p>
+                    <div className="flex items-center gap-1 mt-3 text-xs text-gray-500">
+                      <Download size={10} />
+                      <span>Auto-fetches latest release · {project.repo}</span>
+                    </div>
+                  </button>
+                )
+              })}
+            </div>
+
+            <div className="border border-gray-700/50 rounded-lg overflow-hidden">
+              <button
+                onClick={() => setStep('select')}
+                className="w-full flex items-center justify-between p-4 bg-gray-900 hover:bg-gray-800 transition text-left"
+              >
+                <span className="flex items-center gap-2 text-gray-400 font-medium text-sm">
+                  <Upload size={14} /> Manual Flash — upload your own firmware file
+                </span>
+                <ChevronDown size={16} className="text-gray-500" />
+              </button>
+            </div>
+          </section>
+        )}
+
         {step === 'select' && (
           <section>
             <h2 className="text-lg font-semibold mb-2 text-gray-200">Select Your Device</h2>
@@ -656,6 +799,13 @@ function App() {
                 )}
               </div>
             </div>
+
+            <button
+              onClick={() => setStep('project')}
+              className="mt-6 text-sm text-gray-500 hover:text-gray-300 transition"
+            >
+              &larr; Back to project selection
+            </button>
           </section>
         )}
 
@@ -664,6 +814,9 @@ function App() {
             <h2 className="text-lg font-semibold mb-2 text-gray-200">
               Connect {device === 'esp32s3' ? 'ESP32-S3 / LilyGo' : 'Flipper Zero'}
             </h2>
+            {selectedProject && (
+              <p className="text-xs text-gray-500 mb-1">Project: {selectedProject.name}</p>
+            )}
             <p className="text-sm text-gray-400 mb-6">
               {device === 'esp32s3'
                 ? 'Plug in your device via USB-C. If stuck in boot loop, use recovery steps below first.'
@@ -784,25 +937,52 @@ function App() {
             )}
 
             <button
-              onClick={() => { setStep('select'); setDevice(null) }}
+              onClick={() => { setStep('project'); setDevice(null) }}
               className="mt-6 text-sm text-gray-500 hover:text-gray-300 transition"
             >
-              &larr; Back to device selection
+              &larr; Back to project selection
             </button>
           </section>
         )}
 
         {step === 'upload' && (
           <section>
-            <h2 className="text-lg font-semibold mb-2 text-gray-200">Upload Firmware</h2>
+            <h2 className="text-lg font-semibold mb-2 text-gray-200">
+              {selectedProject ? `Flash ${selectedProject.name}` : 'Upload Firmware'}
+            </h2>
             <p className="text-sm text-gray-400 mb-6">
-              Select your firmware .bin file{device === 'esp32s3' ? ' and optional bootloader/partitions' : ''}.
+              {selectedProject
+                ? `Fetch the latest release from GitHub, or upload your own .bin file.`
+                : `Select your firmware .bin file${device === 'esp32s3' ? ' and optional bootloader/partitions' : ''}.`}
             </p>
+
+            {selectedProject && (
+              <div className="mb-6 p-4 bg-gray-900 border border-gray-700 rounded-lg flex items-center justify-between gap-4">
+                <div>
+                  <p className="text-sm font-medium text-gray-200">{selectedProject.name}</p>
+                  <p className="text-xs text-gray-500">{selectedProject.repo}</p>
+                  {firmwareFile && (
+                    <p className="text-xs text-green-400 mt-1">
+                      ✓ {firmwareFile.name} ({(firmwareFile.size / 1024).toFixed(1)} KB) ready
+                    </p>
+                  )}
+                </div>
+                <button
+                  onClick={() => fetchLatestFirmware(selectedProject)}
+                  disabled={isFetchingFirmware}
+                  className="flex-shrink-0 flex items-center gap-2 bg-yellow-500 hover:bg-yellow-400 disabled:bg-gray-700 disabled:text-gray-500 text-gray-900 px-4 py-2.5 rounded-lg font-bold text-sm transition"
+                >
+                  {isFetchingFirmware
+                    ? <><Loader2 size={15} className="animate-spin" /> Fetching...</>
+                    : <><Download size={15} /> Fetch Latest Release</>}
+                </button>
+              </div>
+            )}
 
             <div className="space-y-4 max-w-lg">
               <div>
                 <label className="block text-sm text-gray-300 mb-1 font-medium">
-                  Firmware File (.bin{device === 'flipper' ? ' or .dfu' : ''}) *
+                  {selectedProject ? 'Or upload manually:' : `Firmware File (.bin${device === 'flipper' ? ' or .dfu' : ''}) *`}
                 </label>
                 <div
                   onClick={() => fileInputRef.current?.click()}
@@ -999,7 +1179,7 @@ function App() {
       <footer className="border-t border-gray-800 py-6 mt-12">
         <div className="max-w-5xl mx-auto px-6 text-center">
           <p className="text-xs text-gray-500">
-            CrashKey Flasher &mdash; Web Serial firmware tool for ESP32 &amp; Flipper Zero
+            Terminator ESP32 Flasher &mdash; Web Serial firmware tool for CrashKey ESP32 devices
           </p>
           <p className="text-xs text-gray-600 mt-1">
             Requires Chrome, Edge, or Opera. Connect via USB for best results.
