@@ -1,0 +1,37 @@
+[env:lilygo-t-embed-plus]
+platform                = espressif32
+board                   = esp32-s3-devkitc-1
+framework               = arduino
+
+; Flash + PSRAM for T-Embed Plus (ESP32-S3, 16MB flash, 8MB OPI PSRAM)
+board_build.flash_mode  = qio
+board_build.flash_freq  = 80MHz
+board_build.flash_size  = 16MB
+board_build.psram_type  = opi
+board_build.psram_size  = 8MB
+board_build.partitions  = default_16MB.csv
+
+; USB CDC on boot (for serial + WebSerial)
+build_flags =
+  -D ARDUINO_USB_MODE=1
+  -D ARDUINO_USB_CDC_ON_BOOT=1
+  ; TFT_eSPI ST7789 170x320, T-Embed Plus pins
+  -D USER_SETUP_LOADED
+  -D ST7789_DRIVER
+  -D TFT_WIDTH=170
+  -D TFT_HEIGHT=320
+  -D TFT_MOSI=11
+  -D TFT_SCLK=12
+  -D TFT_CS=10
+  -D TFT_DC=13
+  -D TFT_RST=9
+  -D TFT_BL=15
+  ; Encoder pins
+  -D PIN_ENCODER_A=1
+  -D PIN_ENCODER_B=2
+  -D PIN_ENCODER_BTN=21
+  ; Speaker
+  -D PIN_SPEAKER=46
+
+upload_protocol         = esptool
+monitor_speed           = 115200
