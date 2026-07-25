@@ -4,15 +4,13 @@
  * Vibe-coded with Microsoft Copilot, compiled via GitHub Actions.
  *
  * Before flashing copy firmware/src/config.h.example → firmware/src/config.h
- * and fill in your WiFi credentials and OpenAI API key.
+ * and fill in your WiFi credentials and local LLM server address.
  */
 
 #include <Arduino.h>
 #include <TFT_eSPI.h>
 #include <WiFi.h>
-#include <WiFiClientSecure.h>
 #include <HTTPClient.h>
-#include <ArduinoJson.h>
 #include "config.h"
 
 // ─── Display ─────────────────────────────────────────────────────────────────
@@ -83,7 +81,7 @@ void drawIdleScreen();
 void drawQuestionList();
 void drawAskingScreen();
 void drawResponseScreen(const String& resp);
-String callOpenAI(const char* question);
+String sendToLocalLLM(String message);
 void printWrapped(const String& text, int x, int y, int maxX,
                   int lineH, uint16_t fg, uint16_t bg, int delayMs);
 
@@ -142,13 +140,13 @@ void loop() {
             drawAskingScreen();
 
             if (WiFi.status() == WL_CONNECTED) {
-                spiritReply = callOpenAI(QUESTIONS[selectedQ]);
+                spiritReply = sendToLocalLLM(String(QUESTIONS[selectedQ]));
             } else {
                 // Attempt reconnect once
                 WiFi.reconnect();
                 delay(3000);
                 spiritReply = (WiFi.status() == WL_CONNECTED)
-                    ? callOpenAI(QUESTIONS[selectedQ])
+                    ? sendToLocalLLM(String(QUESTIONS[selectedQ]))
                     : "The connection to the spirit realm has been severed… the veil is too thick.";
             }
 
@@ -430,65 +428,34 @@ void printWrapped(const String& text, int x, int y, int maxX,
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// ─── OpenAI API call ──────────────────────────────────────────────────────────
-String callOpenAI(const char* question) {
-    WiFiClientSecure secureClient;
-    secureClient.setInsecure();   // skip TLS cert verification (suitable for DIY)
-
+// ─── Local LLM API call ───────────────────────────────────────────────────────
+String sendToLocalLLM(String message) {
+    WiFiClient client;
     HTTPClient http;
+
     http.setTimeout(18000);
+    String url = String("http://") + LOCAL_LLM_HOST + ":" + LOCAL_LLM_PORT + "/quick_response";
+    http.begin(client, url);
+    http.addHeader("Content-Type", "application/json");
 
-    if (!http.begin(secureClient, "https://api.openai.com/v1/chat/completions")) {
-        Serial.println("[OpenAI] http.begin failed");
-        return "The portal to beyond is closed…";
-    }
+    // Escape for JSON: backslashes first, then double-quotes (order matters)
+    message.replace("\\", "\\\\");
+    message.replace("\"", "\\\"");
 
-    http.addHeader("Content-Type",  "application/json");
-    http.addHeader("Authorization", String("Bearer ") + OPENAI_API_KEY);
+    String payload = "{\"message\":\"" + message + "\"}";
+    Serial.println("[LLM] → " + payload);
 
-    // ── Build request JSON ──
-    DynamicJsonDocument reqDoc(1024);
-    reqDoc["model"]      = OPENAI_MODEL;
-    reqDoc["max_tokens"] = OPENAI_MAX_TOKENS;
-    reqDoc["temperature"] = OPENAI_TEMPERATURE;
+    int httpCode = http.POST(payload);
+    Serial.printf("[LLM] HTTP %d\n", httpCode);
 
-    JsonArray msgs  = reqDoc.createNestedArray("messages");
-    JsonObject sys  = msgs.createNestedObject();
-    sys["role"]     = "system";
-    sys["content"]  = SPIRIT_PERSONA;
-    JsonObject user = msgs.createNestedObject();
-    user["role"]    = "user";
-    user["content"] = question;
-
-    String body;
-    serializeJson(reqDoc, body);
-    Serial.println("[OpenAI] → " + body);
-
-    int code = http.POST(body);
-    Serial.printf("[OpenAI] HTTP %d\n", code);
-
-    if (code != 200) {
-        String err = http.getString();
+    if (httpCode > 0) {
+        String response = http.getString();
         http.end();
-        Serial.println("[OpenAI] error body: " + err);
-        return "The spirit's voice was silenced… (HTTP " + String(code) + ")";
+        Serial.println("[LLM] ← " + response.substring(0, 200));
+        return response;
+    } else {
+        http.end();
+        Serial.println("[LLM] error: " + String(httpCode));
+        return "Error contacting local LLM.";
     }
-
-    String payload = http.getString();
-    http.end();
-    Serial.println("[OpenAI] ← " + payload.substring(0, 200));
-
-    // ── Parse response ──
-    DynamicJsonDocument resDoc(4096);
-    DeserializationError err = deserializeJson(resDoc, payload);
-    if (err) {
-        Serial.println("[OpenAI] JSON error: " + String(err.c_str()));
-        return "The spirit's words were garbled beyond understanding…";
-    }
-
-    const char* content = resDoc["choices"][0]["message"]["content"];
-    if (!content || strlen(content) == 0)
-        return "Silence from beyond the veil…";
-
-    return String(content);
 }

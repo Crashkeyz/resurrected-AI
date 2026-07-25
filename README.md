@@ -5,8 +5,8 @@
 
 An AI-powered spirit board that runs on the **LilyGo T-Embed Plus** (ESP32-S3, 1.9-inch
 ST7789V display, EC11 rotary encoder). Rotate the encoder to choose a question, press to
-ask, and watch the AI "spirit" respond in cryptic, otherworldly prose — powered by the
-OpenAI Chat Completions API.
+ask, and watch the AI "spirit" respond in cryptic, otherworldly prose — powered by a
+**local LLM resurrection engine** running on your own network.
 
 ---
 
@@ -60,7 +60,22 @@ firmware flashing for all CrashKey ESP32 devices, right in your browser.
   (`pip install platformio`) **or** [VS Code + PlatformIO IDE extension](https://platformio.org/install/ide?install=vscode)
 - USB cable connected to the T-Embed Plus
 
-### 1 — Configure credentials
+### 1 — Start the resurrection engine (Python backend)
+
+```bash
+cd backend
+pip install -r requirements.txt
+python resurrection_engine.py
+```
+
+The server listens on port **5000**. Note the IP address of the machine running it —
+you will need it for the firmware config below.
+
+> **Model:** the engine defaults to `gpt2` for zero-setup testing. Swap `MODEL_NAME`
+> in `backend/resurrection_engine.py` for any Hugging Face text-generation model
+> (e.g. `TinyLlama/TinyLlama-1.1B-Chat-v1.0`, `microsoft/phi-2`).
+
+### 2 — Configure credentials
 
 ```bash
 cp firmware/src/config.h.example firmware/src/config.h
@@ -71,17 +86,18 @@ Open `firmware/src/config.h` and fill in:
 ```c
 #define WIFI_SSID      "YourNetwork"
 #define WIFI_PASSWORD  "YourPassword"
-#define OPENAI_API_KEY "sk-..."
+#define LOCAL_LLM_HOST "192.168.1.100"   // IP of the machine running resurrection_engine.py
+#define LOCAL_LLM_PORT "5000"
 ```
 
-### 2 — Build
+### 3 — Build
 
 ```bash
 cd firmware
 pio run
 ```
 
-### 3 — Flash
+### 4 — Flash
 
 Hold the **BOOT** button on the board, plug in USB, then:
 
@@ -115,7 +131,8 @@ Go to **Settings → Secrets and variables → Actions** and add:
 |--------|-------|
 | `WIFI_SSID` | Your WiFi network name |
 | `WIFI_PASSWORD` | Your WiFi password |
-| `OPENAI_API_KEY` | Your OpenAI secret key (`sk-…`) |
+| `LOCAL_LLM_HOST` | IP address of your resurrection engine server |
+| `LOCAL_LLM_PORT` | Port (default `5000`) |
 
 The workflow will:
 1. Build the firmware with PlatformIO.
@@ -143,6 +160,9 @@ resurrected-AI/
 ├── .github/
 │   └── workflows/
 │       └── build.yml          # CI — builds firmware & uploads artefact
+├── backend/
+│   ├── resurrection_engine.py # Local LLM Flask server with ResurrectionState
+│   └── requirements.txt       # Python dependencies
 ├── firmware/
 │   ├── platformio.ini         # PlatformIO project (ESP32-S3 target)
 │   ├── src/
