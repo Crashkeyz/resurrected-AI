@@ -434,10 +434,11 @@ String sendToLocalLLM(String message) {
     HTTPClient http;
 
     http.setTimeout(18000);
-    http.begin(client, "http://" LOCAL_LLM_HOST ":" LOCAL_LLM_PORT "/quick_response");
+    String url = String("http://") + LOCAL_LLM_HOST + ":" + LOCAL_LLM_PORT + "/quick_response";
+    http.begin(client, url);
     http.addHeader("Content-Type", "application/json");
 
-    // Escape any double-quotes in the message to keep JSON valid
+    // Escape for JSON: backslashes first, then double-quotes (order matters)
     message.replace("\\", "\\\\");
     message.replace("\"", "\\\"");
 

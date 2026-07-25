@@ -90,14 +90,14 @@ Open `firmware/src/config.h` and fill in:
 #define LOCAL_LLM_PORT "5000"
 ```
 
-### 2 — Build
+### 3 — Build
 
 ```bash
 cd firmware
 pio run
 ```
 
-### 3 — Flash
+### 4 — Flash
 
 Hold the **BOOT** button on the board, plug in USB, then:
 

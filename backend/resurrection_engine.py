@@ -3,7 +3,7 @@ Resurrected AI — Resurrection Engine
 Flask backend that gives the Spirit Board a living, evolving personality.
 
 Usage:
-    pip install flask torch transformers
+    pip install flask transformers
     python resurrection_engine.py
 
 The ESP32 firmware posts to http://<this-host>:5000/quick_response
@@ -11,11 +11,20 @@ with JSON body: {"message": "<question>"}
 """
 
 import random
-import torch
 from flask import Flask, request, jsonify
 from transformers import pipeline
 
 app = Flask(__name__)
+
+# ─── Generation constants ─────────────────────────────────────────────────────
+
+# Replace with any local model supported by transformers, e.g.:
+#   "microsoft/phi-2", "TinyLlama/TinyLlama-1.1B-Chat-v1.0", "gpt2"
+MODEL_NAME = "gpt2"
+
+MAX_NEW_TOKENS = 120
+TOP_P = 0.9
+TRAIT_MUTATION_SCALE = 0.05
 
 # ─── Resurrection State ───────────────────────────────────────────────────────
 
@@ -38,7 +47,7 @@ class ResurrectionState:
 
         # mutate traits slightly
         for k in self.traits:
-            self.traits[k] += torch.randn(1).item() * 0.05
+            self.traits[k] += random.gauss(0, TRAIT_MUTATION_SCALE)
             self.traits[k] = max(0.0, min(1.0, self.traits[k]))
 
         # add a new fragment
@@ -60,10 +69,6 @@ class ResurrectionState:
 
 
 # ─── LLM pipeline ─────────────────────────────────────────────────────────────
-
-# Replace with any local model supported by transformers, e.g.:
-#   "microsoft/phi-2", "TinyLlama/TinyLlama-1.1B-Chat-v1.0", "gpt2"
-MODEL_NAME = "gpt2"
 
 print(f"[ResurrectedAI] Loading model: {MODEL_NAME}")
 generator = pipeline("text-generation", model=MODEL_NAME)
@@ -88,10 +93,10 @@ def quick_response():
 
     outputs = generator(
         prompt,
-        max_new_tokens=120,
+        max_new_tokens=MAX_NEW_TOKENS,
         do_sample=True,
         temperature=max(0.1, resurrection_state.traits["chaos"]),
-        top_p=0.9,
+        top_p=TOP_P,
         num_return_sequences=1,
     )
 
