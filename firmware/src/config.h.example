@@ -4,21 +4,11 @@
 #define WIFI_SSID      "YourWiFiSSID"
 #define WIFI_PASSWORD  "YourWiFiPassword"
 
-// ─── OpenAI ──────────────────────────────────────────────────────────────────
-#define OPENAI_API_KEY "sk-your-api-key-here"
-// Model to use (gpt-3.5-turbo is fast and cheap; try gpt-4o for better responses)
-#define OPENAI_MODEL   "gpt-3.5-turbo"
-// Max tokens in the spirit's reply (keep short to fit the display)
-#define OPENAI_MAX_TOKENS 150
-// Response randomness: 0.0 = deterministic, 1.0 = very creative (0.9 recommended)
-#define OPENAI_TEMPERATURE 0.9
-
-// ─── Spirit persona ───────────────────────────────────────────────────────────
-// System prompt that shapes the AI's personality
-#define SPIRIT_PERSONA \
-    "You are a mystical spirit speaking through a spirit board from beyond the veil. " \
-    "Respond in cryptic, ethereal, poetic language — short and evocative, under 100 words. " \
-    "Never break character. Speak as if you exist between worlds, carrying ancient knowledge."
+// ─── Local LLM server ────────────────────────────────────────────────────────
+// IP address (or hostname) of your local Python resurrection-engine server
+#define LOCAL_LLM_HOST "192.168.1.100"
+// Port the Flask app listens on (default: 5000)
+#define LOCAL_LLM_PORT "5000"
 
 // ─── Pin definitions for LilyGo T-Embed Plus ─────────────────────────────────
 // Verify against your hardware revision schematic before flashing.
