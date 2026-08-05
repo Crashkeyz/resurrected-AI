@@ -1,11 +1,12 @@
-import { useState, useRef, useCallback } from 'react'
+import { useState, useRef, useCallback, useEffect, useMemo } from 'react'
 import './App.css'
 import {
   Usb, Wifi, Bluetooth, Zap, AlertTriangle, CheckCircle2, XCircle,
   Upload, Terminal, ChevronDown, ChevronUp, RotateCcw, Cpu, Radio,
-  HelpCircle, Loader2, Download, BookOpen
+  HelpCircle, Loader2, Download, BookOpen, Shield, Trash2, RefreshCw
 } from 'lucide-react'
 import { FIRMWARE_CATALOG, type CatalogEntry } from './firmware-catalog'
+import { EspToolAdapter, type ChipInfo } from './EspToolAdapter'
 
 type DeviceType = 'esp32s3' | 'flipper' | null
 type FlashStep = 'select' | 'project' | 'connect' | 'upload' | 'flash' | 'done' | 'error'
@@ -30,7 +31,11 @@ function App() {
   const [showRecovery, setShowRecovery] = useState(false)
   const [showDriverHelp, setShowDriverHelp] = useState(false)
   const [showVibeCode, setShowVibeCode] = useState(false)
-  const [chipInfo, setChipInfo] = useState<string>('')
+  const [chipInfo, setChipInfo] = useState<ChipInfo | null>(null)
+  const [verifyAfterWrite, setVerifyAfterWrite] = useState(true)
+  const [hardResetAfterFlash, setHardResetAfterFlash] = useState(true)
+  const [retryAttempt, setRetryAttempt] = useState(0)
+  const [recoveryMode, setRecoveryMode] = useState(false)
   const [flashMethod, setFlashMethod] = useState<'usb' | 'wifi' | 'bt'>('usb')
   const [otaUrl, setOtaUrl] = useState('')
   const [flipperFwUrl, setFlipperFwUrl] = useState('https://update.flipperzero.one/firmware/release/latest')
@@ -44,6 +49,7 @@ function App() {
   const fileInputRef = useRef<HTMLInputElement>(null)
   const bootloaderInputRef = useRef<HTMLInputElement>(null)
   const partitionsInputRef = useRef<HTMLInputElement>(null)
+  const flashAbortRef = useRef(false)
 
   const addLog = useCallback((message: string, level: LogLevel = 'info') => {
     const time = new Date().toLocaleTimeString()
@@ -52,6 +58,28 @@ function App() {
   }, [])
 
   const clearLogs = () => setLogs([])
+
+  const espAdapter = useMemo(() => new EspToolAdapter(portRef, transportRef, addLog), [addLog])
+
+  useEffect(() => {
+    if (!(navigator as Navigator & { serial?: Serial }).serial || device !== 'esp32s3') return
+
+    const serial = (navigator as Navigator & { serial?: Serial }).serial
+    if (!serial) return
+
+    const handleDisconnect = async () => {
+      if (!isConnected) return
+      addLog('⚡ Device disconnected unexpectedly', 'error')
+      flashAbortRef.current = true
+      setIsConnected(false)
+      if (isFlashing) {
+        setRecoveryMode(true)
+      }
+    }
+
+    serial.addEventListener('disconnect', handleDisconnect as EventListener)
+    return () => serial.removeEventListener('disconnect', handleDisconnect as EventListener)
+  }, [addLog, device, isConnected, isFlashing])
 
   const connectSerial = async () => {
     try {
@@ -104,48 +132,16 @@ function App() {
   const detectESPChip = async () => {
     try {
       addLog('Detecting ESP32 chip...', 'info')
-      const { ESPLoader, Transport } = await import('esptool-js')
-      if (!portRef.current) return
-
-      // Ensure any previous transport or open port is cleaned up before creating a new one
-      if (transportRef.current) {
-        try { await transportRef.current.disconnect() } catch { /* ignore */ }
-        transportRef.current = null
-      } else if (portRef.current.readable) {
-        try { await portRef.current.close() } catch { /* ignore */ }
-      }
-
-      const transport = new Transport(portRef.current, true)
-      transportRef.current = transport
-      const esploader = new ESPLoader({
-        transport,
-        baudrate: 115200,
-        terminal: {
-          clean: () => {},
-          writeLine: (data: string) => addLog(data, 'info'),
-          write: (data: string) => {
-            if (data.trim()) addLog(data.trim(), 'info')
-          }
-        }
-      })
-
-      await esploader.main()
-      const chipType = esploader.chip.CHIP_NAME
-      setChipInfo(`${chipType}`)
-      addLog(`Detected: ${chipType}`, 'success')
-
-      // Disconnect after detection so the port is free for flashing
-      await transport.disconnect()
-      transportRef.current = null
-
+      const info = await espAdapter.connect(115200)
+      setChipInfo(info)
+      addLog(`Detected: ${info.chipName}`, 'success')
+      addLog(`MAC: ${info.macAddress} · Flash ID: ${info.flashId} · Flash Size: ${info.flashSize}`, 'info')
+      await espAdapter.disconnect(false)
     } catch (err) {
       const error = err as Error
       addLog(`Chip detection note: ${error.message}`, 'warn')
       addLog('You can still proceed with flashing. Make sure the device is in download mode.', 'info')
-      if (transportRef.current) {
-        try { await transportRef.current.disconnect() } catch { /* ignore */ }
-        transportRef.current = null
-      }
+      await espAdapter.disconnect(false)
     }
   }
 
@@ -158,6 +154,32 @@ function App() {
     })
   }
 
+  const buildFlashFiles = async () => {
+    const fileArray: { data: Uint8Array; address: number; name: string }[] = []
+
+    if (bootloaderFile) {
+      const blData = await readFileAsUint8Array(bootloaderFile)
+      fileArray.push({ data: blData, address: 0x0000, name: bootloaderFile.name })
+      addLog('Bootloader queued at 0x0000', 'info')
+    }
+
+    if (partitionsFile) {
+      const ptData = await readFileAsUint8Array(partitionsFile)
+      fileArray.push({ data: ptData, address: 0x8000, name: partitionsFile.name })
+      addLog('Partitions queued at 0x8000', 'info')
+    }
+
+    if (!firmwareFile) {
+      throw new Error('Please select a firmware .bin file first')
+    }
+
+    const fwData = await readFileAsUint8Array(firmwareFile)
+    fileArray.push({ data: fwData, address: 0x10000, name: firmwareFile.name })
+    addLog(`Firmware queued at 0x10000 (${(firmwareFile.size / 1024).toFixed(1)} KB)`, 'info')
+
+    return fileArray
+  }
+
   const flashESP32USB = async () => {
     if (!firmwareFile) {
       addLog('Please select a firmware .bin file first', 'error')
@@ -167,107 +189,191 @@ function App() {
     setIsFlashing(true)
     setStep('flash')
     setProgress(0)
+    setRetryAttempt(1)
+    setRecoveryMode(false)
+    flashAbortRef.current = false
+
+    const attempts = [
+      {
+        attempt: 1,
+        baudRate: 921600,
+        eraseAll: false,
+        compress: true,
+        verify: verifyAfterWrite,
+        flashSize: 'keep' as const,
+        recovery: false,
+      },
+      {
+        attempt: 2,
+        baudRate: 115200,
+        eraseAll: true,
+        compress: false,
+        verify: false,
+        flashSize: 'keep' as const,
+        recovery: true,
+      },
+      {
+        attempt: 3,
+        baudRate: 115200,
+        eraseAll: true,
+        compress: false,
+        verify: false,
+        flashSize: 'detect' as const,
+        recovery: true,
+      },
+    ]
+
+    let lastError: Error | null = null
 
     try {
       addLog('Starting ESP32-S3 flash via USB...', 'info')
-      addLog('Loading esptool-js...', 'info')
+      const fileArray = await buildFlashFiles()
 
-      const { ESPLoader, Transport } = await import('esptool-js')
-
-      if (!portRef.current) {
-        addLog('No serial port connected', 'error')
-        setIsFlashing(false)
-        return
-      }
-
-      // Cleanly disconnect any previous transport, or close port if opened directly
-      if (transportRef.current) {
-        try { await transportRef.current.disconnect() } catch { /* ignore */ }
-        transportRef.current = null
-      } else if (portRef.current.readable) {
-        try { await portRef.current.close() } catch { /* ignore */ }
-      }
-
-      const transport = new Transport(portRef.current, true)
-      transportRef.current = transport
-      const esploader = new ESPLoader({
-        transport,
-        baudrate: 921600,
-        terminal: {
-          clean: () => {},
-          writeLine: (data: string) => addLog(data, 'info'),
-          write: (data: string) => {
-            if (data.trim()) addLog(data.trim(), 'info')
-          }
+      for (const config of attempts) {
+        if (flashAbortRef.current) {
+          throw new Error('Flash cancelled because the device disconnected unexpectedly')
         }
-      })
 
-      addLog('Connecting to ESP32-S3 bootloader...', 'info')
-      setProgress(5)
-      await esploader.main()
-      addLog('Connected to bootloader!', 'success')
-      setProgress(10)
+        setRetryAttempt(config.attempt)
+        setRecoveryMode(config.recovery)
+        if (config.attempt === 2) {
+          addLog('⚠️ Flash failed. Auto-retrying with recovery settings (attempt 2/3)...', 'warn')
+        } else if (config.attempt === 3) {
+          addLog('⚠️ Attempt 2 failed. Final fallback (attempt 3/3)...', 'warn')
+        }
 
-      const fileArray: { data: Uint8Array; address: number }[] = []
+        if (config.recovery) {
+          addLog('Auto-recovery in progress...', 'warn')
+          await espAdapter.disconnect(false)
+          await detectESPChip()
+        }
 
-      if (bootloaderFile) {
-        const blData = await readFileAsUint8Array(bootloaderFile)
-        fileArray.push({ data: blData, address: 0x0000 })
-        addLog('Bootloader queued at 0x0000', 'info')
+        try {
+          setProgress(config.attempt === 1 ? 15 : 10)
+          addLog(`Connecting to ESP32-S3 bootloader at ${config.baudRate} baud...`, 'info')
+          const result = await espAdapter.writeFlash({
+            fileArray,
+            baudRate: config.baudRate,
+            eraseAll: config.eraseAll,
+            compress: config.compress,
+            verify: config.verify,
+            flashSize: config.flashSize,
+            reboot: hardResetAfterFlash,
+            reportProgress: (pct) => {
+              const base = config.attempt === 1 ? 15 : 10
+              const span = config.attempt === 1 ? 80 : 85
+              setProgress(base + Math.round((pct / 100) * span))
+            },
+          })
+
+          if (config.verify) {
+            for (const verification of result.results) {
+              if (verification.passed) {
+                addLog(`✅ MD5 verify passed for ${verification.name}`, 'success')
+              } else {
+                addLog(`❌ MD5 verify failed for ${verification.name} (expected ${verification.expectedMd5}, got ${verification.actualMd5})`, 'error')
+                throw new Error(`MD5 verification failed for ${verification.name}`)
+              }
+            }
+          }
+
+          setProgress(100)
+          setStep('done')
+          setRecoveryMode(false)
+          addLog(hardResetAfterFlash
+            ? 'Firmware flashed successfully! Device was hard reset.'
+            : 'Firmware flashed successfully! Device remains in bootloader because hard reset is disabled.', 'success')
+          setRetryAttempt(0)
+          return
+        } catch (err) {
+          lastError = err as Error
+          addLog(`Flash error: ${lastError.message}`, 'error')
+          await espAdapter.disconnect(false)
+        }
       }
 
-      if (partitionsFile) {
-        const ptData = await readFileAsUint8Array(partitionsFile)
-        fileArray.push({ data: ptData, address: 0x8000 })
-        addLog('Partitions queued at 0x8000', 'info')
-      }
-
-      const fwData = await readFileAsUint8Array(firmwareFile)
-      fileArray.push({ data: fwData, address: 0x10000 })
-      addLog(`Firmware queued at 0x10000 (${(firmwareFile.size / 1024).toFixed(1)} KB)`, 'info')
-
-      setProgress(15)
-      addLog('Erasing flash and writing...', 'info')
-
-      await esploader.writeFlash({
-        fileArray,
-        flashSize: 'keep',
-        flashMode: 'keep',
-        flashFreq: 'keep',
-        eraseAll: false,
-        compress: true,
-        reportProgress: (_fileIdx: number, written: number, total: number) => {
-          const pct = 15 + Math.round((written / total) * 80)
-          setProgress(pct)
-        },
-        calculateMD5Hash: undefined
-      })
-
-      setProgress(98)
-      addLog('Flash write complete! Resetting device...', 'success')
-
-      try { await esploader.softReset(false) } catch { /* some targets do not support soft reset */ }
-      addLog('Device reset. You may need to unplug and replug USB if it does not restart.', 'info')
-
-      setProgress(100)
-      setStep('done')
-      addLog('Firmware flashed successfully! Device should be running new firmware.', 'success')
-
+      throw lastError ?? new Error('Flash failed after all retries')
     } catch (err) {
       const error = err as Error
       addLog(`Flash error: ${error.message}`, 'error')
-
-      if (error.message?.includes('Failed to connect') || error.message?.includes('Timed out')) {
-        addLog('Device may not be in download mode. Try the Boot Loop Recovery steps below.', 'warn')
-        setShowRecovery(true)
-      }
-
+      addLog(error.stack ?? 'No stack trace available', 'error')
+      addLog('Device may not be in download mode. Try the Boot Loop Recovery steps below.', 'warn')
+      setShowRecovery(true)
       setStep('error')
     } finally {
-      if (transportRef.current) {
-        try { await transportRef.current.disconnect() } catch { /* ignore */ }
-        transportRef.current = null
+      await espAdapter.disconnect(false)
+      setIsFlashing(false)
+      setRecoveryMode(false)
+    }
+  }
+
+  const readAndBackupFlash = async () => {
+    if (!isConnected) {
+      addLog('Connect an ESP32 device before reading flash', 'error')
+      return
+    }
+
+    try {
+      setIsFlashing(true)
+      setStep('flash')
+      setProgress(0)
+      addLog('Preparing flash backup...', 'info')
+      const flashSizeLabel = chipInfo?.flashSize ?? await espAdapter.detectFlashSize()
+      const flashSizeBytes = Number.parseInt(flashSizeLabel, 10) * 1024 * 1024
+      if (!flashSizeBytes || Number.isNaN(flashSizeBytes)) {
+        throw new Error(`Unsupported flash size: ${flashSizeLabel}`)
       }
+
+      const data = await espAdapter.readFlash(0, flashSizeBytes, (read, total) => {
+        setProgress(Math.round((read / total) * 100))
+        addLog(`Backup progress: ${read}/${total} bytes`, 'info')
+      })
+
+      const blob = new Blob([data], { type: 'application/octet-stream' })
+      const url = URL.createObjectURL(blob)
+      const anchor = document.createElement('a')
+      anchor.href = url
+      anchor.download = `${(selectedProject?.id ?? 'esp32-backup')}-${Date.now()}.bin`
+      anchor.click()
+      URL.revokeObjectURL(url)
+      setProgress(100)
+      setStep('done')
+      addLog('Flash backup complete and download started.', 'success')
+    } catch (err) {
+      const error = err as Error
+      addLog(`Backup error: ${error.message}`, 'error')
+      setStep('error')
+    } finally {
+      await espAdapter.disconnect(false)
+      setIsFlashing(false)
+    }
+  }
+
+  const eraseESPFlash = async () => {
+    if (!isConnected) {
+      addLog('Connect an ESP32 device before erasing flash', 'error')
+      return
+    }
+
+    if (!window.confirm('Erase the entire flash chip? This will leave the device blank until you reflash firmware.')) {
+      return
+    }
+
+    try {
+      setIsFlashing(true)
+      setStep('flash')
+      setProgress(5)
+      addLog('Erasing flash chip...', 'warn')
+      await espAdapter.eraseFlash()
+      setProgress(100)
+      setStep('done')
+      addLog('Flash erased. The chip is now blank and remains in bootloader mode until you reflash it.', 'warn')
+    } catch (err) {
+      const error = err as Error
+      addLog(`Erase error: ${error.message}`, 'error')
+      setStep('error')
+    } finally {
+      await espAdapter.disconnect(false)
       setIsFlashing(false)
     }
   }
@@ -422,7 +528,7 @@ function App() {
     portRef.current = null
     setIsConnected(false)
     setStep('select')
-    setChipInfo('')
+    setChipInfo(null)
     setProgress(0)
     addLog('Disconnected.', 'info')
   }
@@ -923,8 +1029,16 @@ function App() {
                 </button>
 
                 {chipInfo && (
-                  <div className="bg-green-900/20 border border-green-700/50 rounded-lg p-3">
-                    <p className="text-green-300 text-sm font-mono">{chipInfo}</p>
+                  <div className="bg-gray-900 border border-green-700/50 rounded-lg p-4 space-y-2">
+                    <div className="flex items-center gap-2 text-green-300 text-sm font-medium">
+                      <Shield size={16} /> Chip Info
+                    </div>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs font-mono">
+                      <p className="text-gray-300"><span className="text-gray-500">Chip:</span> {chipInfo.chipName}</p>
+                      <p className="text-gray-300"><span className="text-gray-500">MAC:</span> {chipInfo.macAddress}</p>
+                      <p className="text-gray-300"><span className="text-gray-500">Flash ID:</span> {chipInfo.flashId}</p>
+                      <p className="text-gray-300"><span className="text-gray-500">Flash Size:</span> {chipInfo.flashSize}</p>
+                    </div>
                   </div>
                 )}
               </div>
@@ -1081,6 +1195,38 @@ function App() {
                 </div>
               )}
 
+              {device === 'esp32s3' && isConnected && (
+                <>
+                  <div className="space-y-3 rounded-lg border border-gray-800 bg-gray-900 p-4">
+                    <label className="flex items-center justify-between gap-3 text-sm text-gray-300">
+                      <span>Verify flash after write (MD5)</span>
+                      <input type="checkbox" checked={verifyAfterWrite} onChange={e => setVerifyAfterWrite(e.target.checked)} className="h-4 w-4 accent-green-500" />
+                    </label>
+                    <label className="flex items-center justify-between gap-3 text-sm text-gray-300">
+                      <span>Hard reset after flash</span>
+                      <input type="checkbox" checked={hardResetAfterFlash} onChange={e => setHardResetAfterFlash(e.target.checked)} className="h-4 w-4 accent-green-500" />
+                    </label>
+                  </div>
+
+                  <div className="flex flex-wrap gap-3">
+                    <button
+                      onClick={readAndBackupFlash}
+                      disabled={isFlashing}
+                      className="bg-gray-800 hover:bg-gray-700 disabled:bg-gray-700 disabled:text-gray-500 text-white px-4 py-2.5 rounded-lg font-medium text-sm transition flex items-center gap-2"
+                    >
+                      <Download size={16} /> Read & Backup Flash
+                    </button>
+                    <button
+                      onClick={eraseESPFlash}
+                      disabled={isFlashing}
+                      className="bg-red-950 hover:bg-red-900 disabled:bg-gray-700 disabled:text-gray-500 text-red-300 px-4 py-2.5 rounded-lg font-medium text-sm transition flex items-center gap-2 border border-red-700/50"
+                    >
+                      <Trash2 size={16} /> Erase Flash
+                    </button>
+                  </div>
+                </>
+              )}
+
               <button
                 onClick={startFlash}
                 disabled={!firmwareFile || isFlashing}
@@ -1117,6 +1263,18 @@ function App() {
               />
             </div>
             <p className="text-xs text-gray-400 mb-6">{progress}% complete</p>
+
+            {retryAttempt > 0 && isFlashing && (
+              <div className="inline-flex items-center gap-2 rounded-full border border-orange-700/50 bg-orange-900/20 px-3 py-1 text-xs text-orange-300 mb-4">
+                <RefreshCw size={12} className={recoveryMode ? 'animate-spin' : ''} /> Retry {retryAttempt}/3
+              </div>
+            )}
+
+            {recoveryMode && (
+              <div className="bg-orange-900/20 border border-orange-700/50 rounded-lg p-4 mb-4">
+                <p className="text-orange-300 text-sm font-medium">Auto-recovery in progress...</p>
+              </div>
+            )}
 
             {step === 'done' && (
               <div className="bg-green-900/20 border border-green-700/50 rounded-lg p-4 mb-4">
