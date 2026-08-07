@@ -38,6 +38,8 @@ function App() {
   const [isFetchingFirmware, setIsFetchingFirmware] = useState(false)
 
   const portRef = useRef<SerialPort | null>(null)
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const transportRef = useRef<any | null>(null)
   const logEndRef = useRef<HTMLDivElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const bootloaderInputRef = useRef<HTMLInputElement>(null)
@@ -105,11 +107,16 @@ function App() {
       const { ESPLoader, Transport } = await import('esptool-js')
       if (!portRef.current) return
 
-      if (portRef.current.readable) {
-        await portRef.current.close()
+      // Ensure any previous transport or open port is cleaned up before creating a new one
+      if (transportRef.current) {
+        try { await transportRef.current.disconnect() } catch { /* ignore */ }
+        transportRef.current = null
+      } else if (portRef.current.readable) {
+        try { await portRef.current.close() } catch { /* ignore */ }
       }
 
       const transport = new Transport(portRef.current, true)
+      transportRef.current = transport
       const esploader = new ESPLoader({
         transport,
         baudrate: 115200,
@@ -127,10 +134,18 @@ function App() {
       setChipInfo(`${chipType}`)
       addLog(`Detected: ${chipType}`, 'success')
 
+      // Disconnect after detection so the port is free for flashing
+      await transport.disconnect()
+      transportRef.current = null
+
     } catch (err) {
       const error = err as Error
       addLog(`Chip detection note: ${error.message}`, 'warn')
       addLog('You can still proceed with flashing. Make sure the device is in download mode.', 'info')
+      if (transportRef.current) {
+        try { await transportRef.current.disconnect() } catch { /* ignore */ }
+        transportRef.current = null
+      }
     }
   }
 
@@ -165,11 +180,16 @@ function App() {
         return
       }
 
-      if (portRef.current.readable) {
-        try { await portRef.current.close() } catch { /* already closed */ }
+      // Cleanly disconnect any previous transport, or close port if opened directly
+      if (transportRef.current) {
+        try { await transportRef.current.disconnect() } catch { /* ignore */ }
+        transportRef.current = null
+      } else if (portRef.current.readable) {
+        try { await portRef.current.close() } catch { /* ignore */ }
       }
 
       const transport = new Transport(portRef.current, true)
+      transportRef.current = transport
       const esploader = new ESPLoader({
         transport,
         baudrate: 921600,
@@ -226,7 +246,8 @@ function App() {
       setProgress(98)
       addLog('Flash write complete! Resetting device...', 'success')
 
-      addLog('Please manually reset your device (unplug and replug USB).', 'info')
+      try { await esploader.softReset(false) } catch { /* some targets do not support soft reset */ }
+      addLog('Device reset. You may need to unplug and replug USB if it does not restart.', 'info')
 
       setProgress(100)
       setStep('done')
@@ -243,6 +264,10 @@ function App() {
 
       setStep('error')
     } finally {
+      if (transportRef.current) {
+        try { await transportRef.current.disconnect() } catch { /* ignore */ }
+        transportRef.current = null
+      }
       setIsFlashing(false)
     }
   }
@@ -384,11 +409,16 @@ function App() {
   }
 
   const disconnect = async () => {
-    try {
-      if (portRef.current?.readable) {
-        await portRef.current.close()
-      }
-    } catch { /* ignore */ }
+    if (transportRef.current) {
+      try { await transportRef.current.disconnect() } catch { /* ignore */ }
+      transportRef.current = null
+    } else {
+      try {
+        if (portRef.current?.readable) {
+          await portRef.current.close()
+        }
+      } catch { /* ignore */ }
+    }
     portRef.current = null
     setIsConnected(false)
     setStep('select')
