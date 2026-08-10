@@ -11,10 +11,12 @@
 #include <TFT_eSPI.h>
 #include <WiFi.h>
 #include <HTTPClient.h>
+#include <Preferences.h>
 #include "config.h"
 
 // ─── Display ─────────────────────────────────────────────────────────────────
 TFT_eSPI tft = TFT_eSPI();
+Preferences prefs;
 
 // ─── RGB565 colour palette ────────────────────────────────────────────────────
 static const uint16_t COL_BG         = 0x0000; // Black
@@ -41,6 +43,8 @@ static const char* QUESTIONS[] = {
     "What do the spirits see?"
 };
 static const int NUM_QUESTIONS = sizeof(QUESTIONS) / sizeof(QUESTIONS[0]);
+static const int MENU_SWITCH_ITEM = 0;
+static const int NUM_MENU_ITEMS = NUM_QUESTIONS + 1; // +1 = switch side item
 
 // ─── Encoder state (interrupt-driven) ────────────────────────────────────────
 static volatile int     encoderCount  = 0;
@@ -48,7 +52,6 @@ static volatile bool    btnPressed    = false;
 static volatile uint8_t lastEncoded   = 0;
 
 void IRAM_ATTR encoderISR() {
-    // Gray-code quadrature decoder
     uint8_t encoded = (digitalRead(PIN_ENCODER_A) << 1) | digitalRead(PIN_ENCODER_B);
     uint8_t sum     = (lastEncoded << 2) | encoded;
     if (sum == 0x0D || sum == 0x04 || sum == 0x02 || sum == 0x0B) encoderCount++;
@@ -59,18 +62,24 @@ void IRAM_ATTR encoderISR() {
 void IRAM_ATTR btnISR() {
     static unsigned long lastMs = 0;
     unsigned long now = millis();
-    if (now - lastMs > 200) {   // 200 ms debounce
+    if (now - lastMs > 200) {
         btnPressed = true;
         lastMs     = now;
     }
 }
 
 // ─── App state ────────────────────────────────────────────────────────────────
-enum State { S_BOOT, S_WIFI, S_IDLE, S_ASKING, S_RESPONSE };
-static State       appState      = S_BOOT;
-static int         selectedQ     = 0;
-static int         lastEncCount  = 0;
-static String      spiritReply   = "";
+enum State { S_SIDE_MENU, S_BOOT, S_WIFI, S_IDLE, S_ASKING, S_RESPONSE, S_BRUCE_DASH };
+enum FirmwareSide : uint8_t { SIDE_BRUCE = 0, SIDE_RESURRECTED = 1 };
+
+static State        appState          = S_SIDE_MENU;
+static FirmwareSide activeSide        = SIDE_RESURRECTED;
+static int          selectedMenuItem  = 1;
+static int          selectedSideItem  = 1;
+static int          lastEncCount      = 0;
+static String       spiritReply       = "";
+static uint32_t     bruceHeartbeat    = 0;
+static uint32_t     bruceLastBeatMs   = 0;
 
 // ─── Forward declarations ─────────────────────────────────────────────────────
 void setupEncoder();
@@ -81,6 +90,13 @@ void drawIdleScreen();
 void drawQuestionList();
 void drawAskingScreen();
 void drawResponseScreen(const String& resp);
+void drawSideMenu();
+void drawBruceScreen();
+void enterSelectedSide();
+void enterResurrectedSide();
+void enterBruceSide();
+void saveSelectedSide(FirmwareSide side);
+void loadSelectedSide();
 String sendToLocalLLM(String message);
 void printWrapped(const String& text, int x, int y, int maxX,
                   int lineH, uint16_t fg, uint16_t bg, int delayMs);
@@ -88,74 +104,81 @@ void printWrapped(const String& text, int x, int y, int maxX,
 // ═══════════════════════════════════════════════════════════════════════════════
 void setup() {
     Serial.begin(115200);
-    Serial.println("[Resurrected AI] booting…");
+    Serial.println("[Firmware] booting…");
 
     setupEncoder();
     setupDisplay();
+    prefs.begin("resurrected", false);
+    loadSelectedSide();
 
-    drawBootScreen();
-    delay(2500);
-
-    // ── WiFi ──
-    appState = S_WIFI;
-    drawWiFiScreen(false);
-
-    WiFi.mode(WIFI_STA);
-    WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
-    for (int i = 0; i < 40 && WiFi.status() != WL_CONNECTED; i++) {
-        delay(500);
-        Serial.print('.');
-        // Animate dots on screen
-        tft.fillCircle(25 + (i % 8) * 15, 220, 4, COL_ACCENT);
-    }
-    Serial.println();
-
-    bool wifiOk = (WiFi.status() == WL_CONNECTED);
-    drawWiFiScreen(wifiOk);
-    if (wifiOk) Serial.println("[WiFi] connected: " + WiFi.localIP().toString());
-    else         Serial.println("[WiFi] FAILED — API calls will not work");
-    delay(1200);
-
-    appState = S_IDLE;
-    drawIdleScreen();
+    selectedSideItem = (activeSide == SIDE_RESURRECTED) ? 1 : 0;
+    appState = S_SIDE_MENU;
+    drawSideMenu();
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
 void loop() {
-    // ── Encoder rotation ──
     int currentCount = encoderCount;
-    if (currentCount != lastEncCount && appState == S_IDLE) {
+
+    if (currentCount != lastEncCount) {
         int diff = currentCount - lastEncCount;
-        selectedQ     = (selectedQ + diff % NUM_QUESTIONS + NUM_QUESTIONS) % NUM_QUESTIONS;
-        lastEncCount  = currentCount;
-        drawQuestionList();
+        lastEncCount = currentCount;
+
+        if (appState == S_IDLE) {
+            selectedMenuItem = (selectedMenuItem + (diff % NUM_MENU_ITEMS) + NUM_MENU_ITEMS) % NUM_MENU_ITEMS;
+            drawQuestionList();
+        } else if (appState == S_SIDE_MENU) {
+            selectedSideItem = (selectedSideItem + (diff % 2) + 2) % 2;
+            drawSideMenu();
+        }
     }
 
-    // ── Button press ──
     if (btnPressed) {
         btnPressed = false;
 
-        if (appState == S_IDLE) {
-            appState = S_ASKING;
-            drawAskingScreen();
-
-            if (WiFi.status() == WL_CONNECTED) {
-                spiritReply = sendToLocalLLM(String(QUESTIONS[selectedQ]));
+        if (appState == S_SIDE_MENU) {
+            activeSide = (selectedSideItem == 0) ? SIDE_BRUCE : SIDE_RESURRECTED;
+            saveSelectedSide(activeSide);
+            enterSelectedSide();
+        } else if (appState == S_IDLE) {
+            if (selectedMenuItem == MENU_SWITCH_ITEM) {
+                selectedSideItem = (activeSide == SIDE_RESURRECTED) ? 1 : 0;
+                appState = S_SIDE_MENU;
+                drawSideMenu();
             } else {
-                // Attempt reconnect once
-                WiFi.reconnect();
-                delay(3000);
-                spiritReply = (WiFi.status() == WL_CONNECTED)
-                    ? sendToLocalLLM(String(QUESTIONS[selectedQ]))
-                    : "The connection to the spirit realm has been severed… the veil is too thick.";
+                appState = S_ASKING;
+                drawAskingScreen();
+
+                int qIdx = selectedMenuItem - 1;
+                if (WiFi.status() == WL_CONNECTED) {
+                    spiritReply = sendToLocalLLM(String(QUESTIONS[qIdx]));
+                } else {
+                    WiFi.reconnect();
+                    delay(3000);
+                    spiritReply = (WiFi.status() == WL_CONNECTED)
+                        ? sendToLocalLLM(String(QUESTIONS[qIdx]))
+                        : "The connection to the spirit realm has been severed… the veil is too thick.";
+                }
+
+                appState = S_RESPONSE;
+                drawResponseScreen(spiritReply);
             }
-
-            appState = S_RESPONSE;
-            drawResponseScreen(spiritReply);
-
         } else if (appState == S_RESPONSE) {
             appState = S_IDLE;
             drawIdleScreen();
+        } else if (appState == S_BRUCE_DASH) {
+            appState = S_SIDE_MENU;
+            selectedSideItem = (activeSide == SIDE_RESURRECTED) ? 1 : 0;
+            drawSideMenu();
+        }
+    }
+
+    if (appState == S_BRUCE_DASH) {
+        if (millis() - bruceLastBeatMs > 1000) {
+            bruceLastBeatMs = millis();
+            bruceHeartbeat++;
+            Serial.println("[BRUCE] heartbeat");
+            drawBruceScreen();
         }
     }
 
@@ -164,7 +187,6 @@ void loop() {
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // ─── Hardware init ────────────────────────────────────────────────────────────
-
 void setupEncoder() {
     pinMode(PIN_ENCODER_A,   INPUT_PULLUP);
     pinMode(PIN_ENCODER_B,   INPUT_PULLUP);
@@ -176,25 +198,112 @@ void setupEncoder() {
 
 void setupDisplay() {
     tft.init();
-    tft.setRotation(0);         // Portrait 170×320
+    tft.setRotation(0);
     tft.fillScreen(COL_BG);
     pinMode(PIN_TFT_BL, OUTPUT);
     digitalWrite(PIN_TFT_BL, HIGH);
     tft.setTextWrap(false);
 }
 
+void loadSelectedSide() {
+    uint8_t raw = prefs.getUChar("fw_side", static_cast<uint8_t>(SIDE_RESURRECTED));
+    activeSide = (raw == static_cast<uint8_t>(SIDE_BRUCE)) ? SIDE_BRUCE : SIDE_RESURRECTED;
+}
+
+void saveSelectedSide(FirmwareSide side) {
+    prefs.putUChar("fw_side", static_cast<uint8_t>(side));
+}
+
+void enterSelectedSide() {
+    if (activeSide == SIDE_BRUCE) enterBruceSide();
+    else                          enterResurrectedSide();
+}
+
+void enterBruceSide() {
+    appState = S_BRUCE_DASH;
+    bruceHeartbeat = 0;
+    bruceLastBeatMs = millis();
+    drawBruceScreen();
+}
+
+void enterResurrectedSide() {
+    appState = S_BOOT;
+    drawBootScreen();
+    delay(1500);
+
+    appState = S_WIFI;
+    drawWiFiScreen(false);
+
+    WiFi.mode(WIFI_STA);
+    WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+    for (int i = 0; i < 40 && WiFi.status() != WL_CONNECTED; i++) {
+        delay(250);
+        tft.fillCircle(25 + (i % 8) * 15, 220, 4, COL_ACCENT);
+    }
+
+    bool wifiOk = (WiFi.status() == WL_CONNECTED);
+    drawWiFiScreen(wifiOk);
+    delay(800);
+
+    selectedMenuItem = 1;
+    appState = S_IDLE;
+    drawIdleScreen();
+}
+
 // ═══════════════════════════════════════════════════════════════════════════════
 // ─── Screens ──────────────────────────────────────────────────────────────────
+void drawSideMenu() {
+    tft.fillScreen(COL_BG);
+    tft.fillRect(0, 0, 170, 34, COL_HEADER_BG);
+    tft.setTextColor(COL_SPIRIT, COL_HEADER_BG);
+    tft.setTextSize(1);
+    tft.setCursor(20, 8); tft.print("FIRMWARE SIDE MENU");
+    tft.setCursor(30, 20); tft.print("Rotate + Press");
+
+    const char* options[2] = {"Bruce Firmware", "Resurrected AI"};
+    for (int i = 0; i < 2; i++) {
+        int y = 90 + i * 58;
+        bool selected = (i == selectedSideItem);
+        tft.fillRect(8, y, 154, 42, selected ? COL_HEADER_BG : COL_BG);
+        tft.setTextColor(selected ? COL_SPIRIT : COL_INACTIVE, selected ? COL_HEADER_BG : COL_BG);
+        tft.setCursor(16, y + 16);
+        tft.print(options[i]);
+    }
+
+    tft.setTextColor(COL_INACTIVE, COL_BG);
+    tft.setCursor(14, 290); tft.print("Saved side boots by default");
+    tft.setCursor(32, 305); tft.print("Press to launch side");
+}
+
+void drawBruceScreen() {
+    tft.fillScreen(COL_BG);
+    tft.fillRect(0, 0, 170, 34, COL_HEADER_BG);
+    tft.setTextColor(COL_SPIRIT, COL_HEADER_BG);
+    tft.setTextSize(1);
+    tft.setCursor(40, 8);  tft.print("BRUCE SIDE");
+    tft.setCursor(15, 20); tft.print("Stability launch mode");
+
+    tft.setTextColor(COL_ACCENT, COL_BG);
+    tft.setCursor(10, 70); tft.print("System heartbeat:");
+    tft.setTextColor(COL_WHITE, COL_BG);
+    tft.setCursor(10, 84); tft.print(bruceHeartbeat);
+
+    tft.setTextColor(COL_ACCENT, COL_BG);
+    tft.setCursor(10, 118); tft.print("WiFi state:");
+    tft.setTextColor((WiFi.status() == WL_CONNECTED) ? COL_GOOD : COL_BAD, COL_BG);
+    tft.setCursor(10, 132); tft.print((WiFi.status() == WL_CONNECTED) ? "Connected" : "Offline");
+
+    tft.setTextColor(COL_INACTIVE, COL_BG);
+    tft.setCursor(10, 176); tft.print("Use this as stable base.");
+    tft.setCursor(10, 200); tft.print("Press button for side menu.");
+}
 
 void drawBootScreen() {
     tft.fillScreen(COL_BG);
-
-    // Starfield background
     randomSeed(42);
     for (int i = 0; i < 60; i++)
         tft.drawPixel(random(170), random(320), COL_INACTIVE);
 
-    // Title
     tft.setTextColor(COL_ACCENT, COL_BG);
     tft.setTextSize(2);
     tft.setCursor(8, 55);  tft.print("RESURRECTED");
@@ -204,18 +313,12 @@ void drawBootScreen() {
     tft.setTextSize(3);
     tft.setCursor(55, 112); tft.print("AI");
 
-    // Decorative lines
     tft.drawFastHLine(10, 148, 150, COL_ACCENT);
     tft.drawFastHLine(10, 151, 150, COL_HEADER_BG);
 
     tft.setTextColor(COL_INACTIVE, COL_BG);
     tft.setTextSize(1);
-    tft.setCursor(22, 163); tft.print("LilyGo T-Embed Plus");
-    tft.setCursor(38, 176); tft.print("Spirit Board v1.0");
-
-    tft.setTextColor(COL_ACCENT, COL_BG);
-    tft.setTextSize(2);
-    tft.setCursor(52, 240); tft.print("* * *");
+    tft.setCursor(16, 163); tft.print("Resurrected side launch");
 }
 
 void drawWiFiScreen(bool connected) {
@@ -247,79 +350,71 @@ void drawWiFiScreen(bool connected) {
 
 void drawIdleScreen() {
     tft.fillScreen(COL_BG);
-
-    // ── Header ──
     tft.fillRect(0, 0, 170, 34, COL_HEADER_BG);
     tft.setTextColor(COL_SPIRIT, COL_HEADER_BG);
     tft.setTextSize(1);
     tft.setCursor(16, 6);  tft.print("~~ SPIRIT  BOARD ~~");
-    tft.setCursor(22, 19); tft.print("Ask the beyond…");
+    tft.setCursor(10, 19); tft.print("AI side + mode switch");
 
-    // WiFi dot
     uint16_t dotCol = (WiFi.status() == WL_CONNECTED) ? COL_GOOD : COL_BAD;
     tft.fillCircle(162, 10, 4, dotCol);
-
     tft.drawFastHLine(0, 36, 170, COL_ACCENT);
 
     drawQuestionList();
 
-    // ── Footer ──
     tft.drawFastHLine(0, 305, 170, COL_ACCENT);
     tft.setTextColor(COL_INACTIVE, COL_BG);
     tft.setTextSize(1);
-    tft.setCursor(10, 310); tft.print("Turn=Select  Press=Ask");
+    tft.setCursor(8, 310); tft.print("Turn=Select  Press=Open");
 }
 
 void drawQuestionList() {
-    // Clear list area
     tft.fillRect(0, 38, 170, 265, COL_BG);
 
     const int VISIBLE = 7;
     const int ITEM_H  = 36;
-    const int CHARS   = 26;   // characters per line in question area
+    const int CHARS   = 26;
 
-    int startIdx = selectedQ - 3;
+    int startIdx = selectedMenuItem - 3;
     if (startIdx < 0) startIdx = 0;
-    if (startIdx + VISIBLE > NUM_QUESTIONS) startIdx = NUM_QUESTIONS - VISIBLE;
+    if (startIdx + VISIBLE > NUM_MENU_ITEMS) startIdx = NUM_MENU_ITEMS - VISIBLE;
+    if (startIdx < 0) startIdx = 0;
 
     for (int i = 0; i < VISIBLE; i++) {
         int idx = startIdx + i;
-        if (idx >= NUM_QUESTIONS) break;
+        if (idx >= NUM_MENU_ITEMS) break;
 
         int y = 40 + i * ITEM_H;
+        bool selected = (idx == selectedMenuItem);
 
-        if (idx == selectedQ) {
+        if (selected) {
             tft.fillRect(2, y, 164, ITEM_H - 2, COL_HEADER_BG);
             tft.setTextColor(COL_SPIRIT, COL_HEADER_BG);
-            // Small arrow indicator
             tft.fillTriangle(5, y + 9, 5, y + 23, 12, y + 16, COL_ACCENT);
         } else {
             tft.setTextColor(COL_INACTIVE, COL_BG);
         }
 
         tft.setTextSize(1);
-        String q = String(QUESTIONS[idx]);
-        if (q.length() > (size_t)CHARS) {
-            tft.setCursor(16, y + 6);  tft.print(q.substring(0, CHARS));
-            tft.setCursor(16, y + 18); tft.print(q.substring(CHARS));
+        String label = (idx == MENU_SWITCH_ITEM) ? "Switch firmware side..." : String(QUESTIONS[idx - 1]);
+        if (label.length() > (size_t)CHARS) {
+            tft.setCursor(16, y + 6);  tft.print(label.substring(0, CHARS));
+            tft.setCursor(16, y + 18); tft.print(label.substring(CHARS));
         } else {
-            tft.setCursor(16, y + 12); tft.print(q);
+            tft.setCursor(16, y + 12); tft.print(label);
         }
     }
 
-    // Scrollbar
-    if (NUM_QUESTIONS > VISIBLE) {
+    if (NUM_MENU_ITEMS > VISIBLE) {
         tft.fillRect(167, 40, 2, 263, COL_HEADER_BG);
-        int barH = 263 * VISIBLE / NUM_QUESTIONS;
-        int barY = 40 + (263 - barH) * selectedQ / (NUM_QUESTIONS - 1);
+        int barH = 263 * VISIBLE / NUM_MENU_ITEMS;
+        int barY = 40 + (263 - barH) * selectedMenuItem / (NUM_MENU_ITEMS - 1);
         tft.fillRect(167, barY, 2, barH, COL_ACCENT);
     }
 }
 
 void drawAskingScreen() {
     tft.fillScreen(COL_BG);
-
-    // Starfield
     randomSeed(millis());
     for (int i = 0; i < 40; i++)
         tft.drawPixel(random(170), random(320), COL_INACTIVE);
@@ -337,21 +432,14 @@ void drawAskingScreen() {
     tft.setTextSize(1);
     tft.setCursor(10, 175); tft.print("You asked:");
 
-    String q = String(QUESTIONS[selectedQ]);
+    int qIdx = selectedMenuItem - 1;
+    String q = (qIdx >= 0 && qIdx < NUM_QUESTIONS) ? String(QUESTIONS[qIdx]) : String("");
     printWrapped(q, 10, 190, 160, 14, COL_WHITE, COL_BG, 0);
-
-    // Animated waiting dots
-    for (int i = 0; i < 3; i++) {
-        tft.fillCircle(65 + i * 22, 268, 6, COL_ACCENT);
-        delay(250);
-        tft.fillCircle(65 + i * 22, 268, 6, COL_SPIRIT);
-    }
 }
 
 void drawResponseScreen(const String& resp) {
     tft.fillScreen(COL_BG);
 
-    // ── Header ──
     tft.fillRect(0, 0, 170, 28, COL_HEADER_BG);
     tft.setTextColor(COL_ACCENT, COL_HEADER_BG);
     tft.setTextSize(1);
@@ -359,12 +447,10 @@ void drawResponseScreen(const String& resp) {
     tft.setCursor(50, 17); tft.print("~ ~ ~ ~ ~ ~");
     tft.drawFastHLine(0, 30, 170, COL_ACCENT);
 
-    // ── Typewriter response ──
     String text = resp;
     if (text.length() > 480) text = text.substring(0, 477) + "…";
     printWrapped(text, 5, 40, 164, 14, COL_SPIRIT, COL_BG, 18);
 
-    // ── Footer ──
     tft.drawFastHLine(0, 303, 170, COL_ACCENT);
     tft.setTextColor(COL_INACTIVE, COL_BG);
     tft.setTextSize(1);
@@ -372,16 +458,9 @@ void drawResponseScreen(const String& resp) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// ─── Word-wrapped text printer with optional typewriter delay ─────────────────
-//   text    — string to print
-//   x,y     — top-left start position
-//   maxX    — right edge (wrap before this x)
-//   lineH   — pixel height of one line
-//   fg,bg   — foreground / background colour
-//   delayMs — milliseconds between characters (0 = instant)
 void printWrapped(const String& text, int x, int y, int maxX,
                   int lineH, uint16_t fg, uint16_t bg, int delayMs) {
-    const int charW = 6; // TFT_eSPI size-1 character width
+    const int charW = 6;
     int curX = x;
     int curY = y;
     int len  = text.length();
@@ -392,7 +471,6 @@ void printWrapped(const String& text, int x, int y, int maxX,
 
     while (i < len) {
         char c = text[i];
-
         if (c == '\n') {
             curX = x;
             curY += lineH;
@@ -400,14 +478,14 @@ void printWrapped(const String& text, int x, int y, int maxX,
             continue;
         }
 
-        // Skip leading spaces at line start
-        if (c == ' ' && curX == x) { i++; continue; }
+        if (c == ' ' && curX == x) {
+            i++;
+            continue;
+        }
 
-        // Find next word boundary to decide wrapping
         if (c != ' ') {
             int wordEnd = i;
-            while (wordEnd < len && text[wordEnd] != ' ' && text[wordEnd] != '\n')
-                wordEnd++;
+            while (wordEnd < len && text[wordEnd] != ' ' && text[wordEnd] != '\n') wordEnd++;
             int wordPx = (wordEnd - i) * charW;
             if (curX + wordPx > maxX && curX != x) {
                 curX = x;
@@ -417,18 +495,14 @@ void printWrapped(const String& text, int x, int y, int maxX,
         }
 
         if (curY > 295) return;
-
         tft.drawChar(curX, curY, c, fg, bg, 1);
         curX += charW;
-
         if (delayMs > 0) delay(delayMs);
-
         i++;
     }
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// ─── Local LLM API call ───────────────────────────────────────────────────────
 String sendToLocalLLM(String message) {
     WiFiClient client;
     HTTPClient http;
@@ -438,24 +512,18 @@ String sendToLocalLLM(String message) {
     http.begin(client, url);
     http.addHeader("Content-Type", "application/json");
 
-    // Escape for JSON: backslashes first, then double-quotes (order matters)
     message.replace("\\", "\\\\");
     message.replace("\"", "\\\"");
 
     String payload = "{\"message\":\"" + message + "\"}";
-    Serial.println("[LLM] → " + payload);
-
     int httpCode = http.POST(payload);
-    Serial.printf("[LLM] HTTP %d\n", httpCode);
 
     if (httpCode > 0) {
         String response = http.getString();
         http.end();
-        Serial.println("[LLM] ← " + response.substring(0, 200));
         return response;
-    } else {
-        http.end();
-        Serial.println("[LLM] error: " + String(httpCode));
-        return "Error contacting local LLM.";
     }
+
+    http.end();
+    return "Error contacting local LLM.";
 }

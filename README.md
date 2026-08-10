@@ -145,11 +145,13 @@ The workflow will:
 
 ## Usage
 
-1. Power the board — a boot screen appears, then the device connects to WiFi.
-2. **Rotate** the encoder to scroll through the question list.
-3. **Press** the encoder button to send the highlighted question to the AI.
-4. The spirit's reply is revealed character-by-character on the display.
-5. **Press** again to return to the question list.
+1. Power the board and choose a firmware side from the startup menu:
+   - **Bruce Firmware** (stable launch side)
+   - **Resurrected AI** (spirit board side)
+2. In **Resurrected AI** mode, rotate to select entries.
+3. Select **Switch firmware side...** at the top of the list any time to return to side selection.
+4. Select a question and press to send it to the local AI.
+5. Press once more from the response screen to return to the question list.
 
 ---
 
