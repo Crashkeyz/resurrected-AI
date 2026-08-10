@@ -1,0 +1,28 @@
+[env:t-embed-plus]
+platform = espressif32
+board = esp32-s3-devkitc-1
+framework = arduino
+monitor_speed = 115200
+
+lib_deps =
+  bodmer/TFT_eSPI
+
+build_flags =
+  -D USER_SETUP_LOADED=1
+  -D ST7789_DRIVER=1
+  -D TFT_WIDTH=170
+  -D TFT_HEIGHT=320
+  -D CGRAM_OFFSET=1
+  -D TFT_MOSI=11
+  -D TFT_SCLK=12
+  -D TFT_CS=10
+  -D TFT_DC=13
+  -D TFT_RST=9
+  -D TFT_BL=15
+  -D LOAD_GLCD=1
+  -D LOAD_FONT2=1
+  -D LOAD_FONT4=1
+  -D LOAD_FONT6=1
+  -D LOAD_FONT7=1
+  -D LOAD_FONT8=1
+  -D SPI_FREQUENCY=40000000
