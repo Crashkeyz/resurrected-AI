@@ -26,6 +26,17 @@ firmware flashing for all CrashKey ESP32 devices, right in your browser.
 
 > **Note:** GitHub Pages must be enabled in Settings → Pages → Source: `gh-pages` branch.
 
+## ✨ "Just Works" Rule Set (Magic Mode)
+
+To keep setup low-risk for non-technical users, Resurrected AI follows these product rules:
+
+1. **One-click first:** browser flasher is the default install path.
+2. **No mandatory local tooling:** normal users should not need PlatformIO, Python, or CLI setup.
+3. **Auto backend behavior:** after flash, firmware should attempt to reach its configured AI backend automatically.
+4. **Graceful fallback:** if backend is unavailable, device still responds with offline fallback text instead of failing.
+5. **Menu safety:** advanced configuration is optional and isolated in settings paths, not required for first use.
+6. **Bruce parity:** user experience target is "flash, boot, use" with no fragile manual steps.
+
 ---
 
 ## Hardware
@@ -153,7 +164,7 @@ The workflow will:
    - **Resurrected AI** (spirit board side)
 2. In **Resurrected AI** mode, rotate to select entries.
 3. Select **Switch firmware side...** at the top of the list any time to return to side selection.
-4. Select a question and press to send it to the local AI.
+4. Select a question and press to send it to the configured AI backend.
 5. Press once more from the response screen to return to the question list.
 
 ---
