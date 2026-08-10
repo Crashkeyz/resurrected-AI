@@ -548,6 +548,16 @@ function App() {
       </header>
 
       <main className="max-w-5xl mx-auto px-6 py-8">
+        <section className="mb-6 rounded-xl border border-amber-600/40 bg-amber-950/20 p-4">
+          <p className="flex items-start gap-2 text-sm text-amber-200">
+            <AlertTriangle size={16} className="mt-0.5 flex-shrink-0 text-amber-400" />
+            <span>
+              <strong>Disclaimer:</strong> Resurrected AI is currently in beta and actively being worked on.
+              No reimbursements are offered.
+            </span>
+          </p>
+        </section>
+
         {step === 'project' && (
           <section>
             <h2 className="text-lg font-semibold mb-1 text-gray-200 flex items-center gap-2">

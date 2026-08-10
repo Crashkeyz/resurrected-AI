@@ -8,6 +8,9 @@ ST7789V display, EC11 rotary encoder). Rotate the encoder to choose a question, 
 ask, and watch the AI "spirit" respond in cryptic, otherworldly prose — powered by a
 **local LLM resurrection engine** running on your own network.
 
+> **Disclaimer:** Resurrected AI is currently in beta and actively being worked on.  
+> No reimbursements are offered.
+
 ---
 
 ## 🔥 Flash via Browser
