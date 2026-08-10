@@ -1,0 +1,15 @@
+#pragma once
+
+// WiFi
+#define WIFI_SSID "YOUR_WIFI_NAME"
+#define WIFI_PASSWORD "YOUR_WIFI_PASSWORD"
+
+// Local LLM server
+#define LOCAL_LLM_HOST "192.168.1.50"
+#define LOCAL_LLM_PORT 5000
+
+// T-Embed Plus pins (adjust if needed)
+#define PIN_ENCODER_A   43
+#define PIN_ENCODER_B   44
+#define PIN_ENCODER_BTN 0
+#define PIN_TFT_BL      15
