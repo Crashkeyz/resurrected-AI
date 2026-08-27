@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Resurrected AI — Firmware Installer</title>
+  <script type="module" src="https://unpkg.com/esp-web-tools@10/dist/web/install-button.js?module"></script>
+  <style>
+    body {
+      margin: 0;
+      background: #0b0f14;
+      color: #fff;
+      font-family: Arial, sans-serif;
+      display: grid;
+      place-items: center;
+      min-height: 100vh;
+      text-align: center;
+    }
+    h1 { font-size: 1.4rem; margin-bottom: 8px; }
+    p { color: #b7c4d8; margin-bottom: 32px; font-size: 0.95rem; }
+    esp-web-install-button::part(button) {
+      font-size: 2.5rem;
+      font-weight: 900;
+      padding: 28px 56px;
+      border: none;
+      border-radius: 18px;
+      background: linear-gradient(135deg, #26d07c, #00a4ff);
+      color: #fff;
+      cursor: pointer;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+  </style>
+</head>
+<body>
+  <div>
+    <h1>Resurrected AI — Spirit Board</h1>
+    <p>Plug in your ESP32-S3 via USB, then click the button below (Chrome or Edge required).</p>
+    <esp-web-install-button manifest="./firmware.manifest.json">
+      <button slot="activate">DOWNLOAD</button>
+    </esp-web-install-button>
+  </div>
+</body>
+</html>

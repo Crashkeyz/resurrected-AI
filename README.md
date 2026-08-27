@@ -12,16 +12,7 @@ ask, and watch the AI "spirit" respond in cryptic, otherworldly prose — powere
 
 ## 🔥 Flash via Browser
 
-**[Terminator ESP32 Flasher](https://crashkeyz.github.io/resurrected-AI/)** — One-click
-firmware flashing for all CrashKey ESP32 devices, right in your browser.
-
-1. Open the flasher in Chrome, Edge, or Opera (Web Serial required).
-2. Select **Resurrected AI — Spirit Board** from the project list.
-3. Click **Fetch Latest Release** — firmware downloads automatically from GitHub Releases.
-4. Plug in your LilyGo T-Embed Plus via USB-C (hold BOOT while plugging in for first flash).
-5. Click **Connect via USB**, then **Flash**.
-
-> **Note:** GitHub Pages must be enabled in Settings → Pages → Source: `gh-pages` branch.
+Go to **https://crashkeyz.github.io/resurrected-AI/**, plug in your ESP32-S3, and click the big **DOWNLOAD** button — that's it.
 
 ---
 
